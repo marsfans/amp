@@ -27,6 +27,7 @@ use self::termion::event::Key as TermionKey;
 use crate::input::Key;
 use crate::models::application::Event;
 
+const MAX_QUEUED_EVENTS: usize = 1024;
 const STDIN_INPUT: Token = Token(0);
 const RESIZE: Token = Token(1);
 
@@ -130,12 +131,15 @@ impl TermionTerminal {
 }
 
 impl Terminal for TermionTerminal {
-    fn listen(&self) -> Option<Event> {
+    fn listen(&self) -> Option<Vec<Event>> {
         // Check for events on stdin.
-        let mut events = Events::with_capacity(1);
+        let mut events = Events::with_capacity(MAX_QUEUED_EVENTS);
         self.event_listener.poll(&mut events, Some(Duration::from_millis(100))).ok()?;
-        if let Some(event) = events.iter().next() {
-            match event.token() {
+
+        let mut converted_events = Vec::new();
+
+        for event in events {
+            if let Some(converted_event) = match event.token() {
                 STDIN_INPUT => {
                     let mut guard = self.input.lock().ok()?;
                     let input_handle = guard.as_mut()?;
@@ -169,10 +173,12 @@ impl Terminal for TermionTerminal {
                     Some(Event::Resize)
                 }
                 _ => None,
+            } {
+                converted_events.push(converted_event);
             }
-        } else {
-            None
         }
+
+        Some(converted_events)
     }
 
     fn clear(&self) {
@@ -322,13 +328,13 @@ fn create_event_listener() -> Result<(Poll, Signals)> {
         &EventedFd(&stdin().as_raw_fd()),
         STDIN_INPUT,
         Ready::readable(),
-        PollOpt::level()
+        PollOpt::edge()
     ).chain_err(|| "Failed to register stdin to event listener")?;
     event_listener.register(
         &signals,
         RESIZE,
         Ready::readable(),
-        PollOpt::level()
+        PollOpt::edge()
     ).chain_err(|| "Failed to register resize signal to event listener")?;
 
     Ok((event_listener, signals))
